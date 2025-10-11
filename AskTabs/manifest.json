@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "AskTabs",
+  "description": "Ask Gemini across your open tabs using the side panel",
+  "version": "1.0",
+  "permissions": [
+    "tabs",
+    "scripting",
+    "sidePanel",
+    "activeTab",
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "icons": {
+    "16": "logo.png",
+    "32": "logo.png", 
+    "48": "logo.png",
+    "128": "logo.png"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_title": "Open Tab Assistant Side Panel"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  },
+  "web_accessible_resources": [{
+    "resources": ["sidepanel.html", "sidepanel.js"],
+    "matches": ["<all_urls>"]
+  }]
+}
