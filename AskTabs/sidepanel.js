@@ -373,17 +373,14 @@ async function refreshTabs() {
   }
 }
 
+// Replace the existing onAsk function in sidepanel.js with this:
+
 async function onAsk() {
   const input = el.question();
   if (!input) return;
 
   const q = input.value.trim();
   if (!q) return;
-
-  const tabsWithContent = state.tabs.filter(t => t.hasContent);
-  const tabsWithSummaries = state.tabs.filter(t => t.summary);
-
-  console.log(`📊 ${state.tabs.length} tabs: ${tabsWithContent.length} content, ${tabsWithSummaries.length} summaries`);
 
   input.value = "";
   addMessage(q, "user");
@@ -392,6 +389,18 @@ async function onAsk() {
   state.asking = true;
 
   try {
+    // REFRESH TABS FIRST before asking (if data is old)
+    const isStale = Date.now() - state.lastTabUpdate > 5000; // 5 seconds
+    if (isStale || state.tabs.length === 0) {
+      console.log('🔄 Refreshing tabs before asking...');
+      await refreshTabs();
+    }
+
+    const tabsWithContent = state.tabs.filter(t => t.hasContent);
+    const tabsWithSummaries = state.tabs.filter(t => t.summary);
+
+    console.log(`📊 ${state.tabs.length} tabs: ${tabsWithContent.length} content, ${tabsWithSummaries.length} summaries`);
+
     console.log('🤔 Sending question...');
     const response = await sendMessageToBackground({ 
       type: 'ASK_GEMINI', 
@@ -410,6 +419,7 @@ async function onAsk() {
     console.error('❌ Error:', error);
     let errorMessage = `Error: ${error.message}.`;
     
+    const tabsWithContent = state.tabs.filter(t => t.hasContent);
     if (tabsWithContent.length === 0) {
       errorMessage += ' No content found. Try refreshing tabs.';
     }
