@@ -88,44 +88,90 @@ function broadcastTabDataUpdate() {
 
 function extractPageContent() {
   try {
+    // Give pages more time to load
     if (document.readyState === 'loading') {
-      return { text: "Loading...", error: "loading" };
+      return { text: "Page still loading...", success: false };
     }
 
-    let allText = '';
-    const selectors = ['main', 'article', '[role="main"]', '.content', 'body'];
+    // Strategy 1: Try main content areas first
+    const mainSelectors = [
+      'main', 'article', '[role="main"]', 
+      '.content', '.main-content', '#main-content',
+      '.post-content', '.entry-content', '.story-content',
+      '#content', '.body', '.text'
+    ];
 
-    for (const selector of selectors) {
-      const element = document.querySelector(selector);
-      if (element) {
+    let bestText = '';
+    
+    for (const selector of mainSelectors) {
+      const elements = document.querySelectorAll(selector);
+      for (const element of elements) {
         const clone = element.cloneNode(true);
-        clone.querySelectorAll('script, style, nav, header, footer, aside, .ad').forEach(el => el.remove());
-        const text = clone.innerText || clone.textContent || '';
-        if (text.length > allText.length) {
-          allText = text;
-          break;
+        // Clean up
+        clone.querySelectorAll('script, style, nav, header, footer, aside, .ad, .ads, .navigation, .menu, .sidebar, .comments, .social-share').forEach(el => el.remove());
+        
+        const text = clone.textContent || '';
+        const cleanText = text.replace(/\s+/g, ' ').trim();
+        
+        if (cleanText.length > bestText.length && cleanText.length > 200) {
+          bestText = cleanText;
         }
       }
     }
 
-    if (allText.length < 100) {
-      allText = Array.from(document.querySelectorAll('p, h1, h2, h3'))
-        .map(p => (p.innerText || '').trim())
-        .filter(t => t.length > 20)
-        .join(' ');
+    // Strategy 2: If no good content found, try body with smart filtering
+    if (bestText.length < 300) {
+      const body = document.body.cloneNode(true);
+      // Remove common non-content elements
+      body.querySelectorAll(`
+        script, style, nav, header, footer, aside, 
+        .ad, .ads, .advertisement, .navigation, .menu, .sidebar,
+        .comments, .social-share, .share-buttons, .newsletter,
+        .popup, .modal, .cookie-consent, .newsletter-signup
+      `).forEach(el => el.remove());
+      
+      const text = body.textContent || '';
+      bestText = text.replace(/\s+/g, ' ').trim();
     }
 
-    const cleaned = allText.replace(/\s+/g, ' ').trim();
-    return { text: cleaned, length: cleaned.length, title: document.title || '' };
+    // Strategy 3: Extract paragraphs and headings
+    if (bestText.length < 200) {
+      const contentElements = document.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, div');
+      const texts = [];
+      
+      for (const el of contentElements) {
+        const text = el.textContent || '';
+        const cleanText = text.replace(/\s+/g, ' ').trim();
+        // Only include substantial content
+        if (cleanText.length > 30 && cleanText.length < 1000) {
+          texts.push(cleanText);
+        }
+      }
+      
+      bestText = texts.join(' ').slice(0, 8000);
+    }
+
+    const success = bestText.length >= 100;
+    
+    return { 
+      text: bestText.slice(0, 10000), 
+      length: bestText.length, 
+      title: document.title || '',
+      success: success
+    };
   } catch (error) {
-    return { text: '', error: error.message };
+    return { text: '', error: error.message, success: false };
   }
 }
 
 // Ultra-short summaries with 2s timeout
 async function summarizeContent(text, title) {
   try {
-    if (!summarizerSession || !text || text.length < 200) return null;
+ if (!summarizerSession || !text || text.length < 200) {
+  // fallback summary
+  return text.slice(0, 150).replace(/\s+/g, ' ') + '...';
+}
+
     
     const contentToSummarize = `${title}\n\n${text.slice(0, 3000)}`;
     
@@ -145,26 +191,60 @@ async function summarizeContent(text, title) {
 async function extractTabContent(tab) {
   if (!tab.id || !tab.url) return null;
   
-  const restrictedProtocols = ['chrome:', 'chrome-extension:', 'edge:', 'file:', 'about:'];
+  const base = {
+    id: tab.id,
+    url: tab.url,
+    title: tab.title || 'Untitled',
+    favicon: tab.favIconUrl || '',
+  };
+
+  // Check for restricted protocols that we cannot access
+  const restrictedProtocols = ['chrome:', 'edge:', 'about:', 'data:'];
   if (restrictedProtocols.some(proto => tab.url.startsWith(proto))) {
     return {
-      id: tab.id,
-      url: tab.url,
-      title: tab.title || 'Untitled',
-      favicon: tab.favIconUrl || '',
+      ...base,
       text: 'Restricted page',
       hasContent: false,
       error: 'restricted'
     };
   }
-  
-  const base = {
-    id: tab.id,
-    url: tab.url,
-    title: tab.title || 'Untitled',
-    favicon: tab.favIconUrl || `https://www.google.com/s2/favicons?domain=${new URL(tab.url).hostname}&sz=32`,
-  };
 
+  // Special handling for chrome-extension:// URLs
+  if (tab.url.startsWith('chrome-extension://')) {
+    console.log(`📄 Extension page detected: ${tab.title}`);
+    
+    // For extension pages, we can use the visible tab info
+    // but cannot inject scripts, so we create a basic summary from the title
+    const extensionSummary = `Extension page: ${tab.title}. ${tab.url.includes('claude.ai') ? 'Claude AI conversation interface.' : 'Browser extension interface.'}`;
+    
+    return {
+      ...base,
+      text: extensionSummary,
+      summary: `Extension: ${tab.title}`,
+      hasContent: true,
+      isExtension: true,
+      length: extensionSummary.length
+    };
+  }
+
+  // For file:// URLs, check if we have permission
+  if (tab.url.startsWith('file://')) {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => true,
+      });
+    } catch (error) {
+      return {
+        ...base,
+        text: 'File URL - Enable "Allow access to file URLs" in extension settings',
+        hasContent: false,
+        error: 'file_permission'
+      };
+    }
+  }
+
+  // For regular web pages (http://, https://, file:// with permission)
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
@@ -172,33 +252,30 @@ async function extractTabContent(tab) {
       world: 'MAIN'
     });
     
-    const extractionResult = results[0]?.result || { text: '' };
-    const extractedText = extractionResult.text || '';
+    const extractionResult = results[0]?.result || { text: '', success: false };
     
-    if (extractedText && extractedText.length > 50) {
-      let summary = null;
-      if (extractedText.length > 200) {
-        summary = await summarizeContent(extractedText, tab.title);
-      }
-      
+    if (extractionResult.success && extractionResult.text && extractionResult.text.length > 100) {
       return {
         ...base,
-        text: extractedText.slice(0, 10000),
-        summary: summary,
-        hasContent: true
+        text: extractionResult.text.slice(0, 10000),
+        summary: null,
+        hasContent: true,
+        length: extractionResult.text.length
       };
     }
     
     return {
       ...base,
-      text: extractedText || "No content",
+      text: extractionResult.text || "No extractable content",
       summary: null,
-      hasContent: false
+      hasContent: false,
+      error: extractionResult.error
     };
   } catch (error) {
+    console.log(`❌ Tab ${tab.id} extraction failed:`, error.message);
     return {
       ...base,
-      text: "Extraction failed",
+      text: "Extraction failed - no permission",
       summary: null,
       hasContent: false,
       error: error.message
@@ -208,18 +285,45 @@ async function extractTabContent(tab) {
 
 async function refreshAllTabs() {
   try {
-    console.log('🔄 Fast refresh...');
-    const tabs = await chrome.tabs.query({ currentWindow: true });
+    console.log('🔄 Fast refresh started...');
     
-    if (!summarizerSession) {
-      await initializeSummarizer();
+    // Get all tabs from all windows (not just current window)
+    const allTabs = await chrome.tabs.query({});
+    
+    console.log(`📑 Total tabs across all windows: ${allTabs.length}`);
+    
+    // Filter out only Chrome internal system pages (keep extension pages)
+    const tabs = allTabs.filter(tab => {
+      const url = tab.url || '';
+      // Keep everything except chrome:// system pages
+      return !url.startsWith('chrome://') && 
+             !url.startsWith('about:') && 
+             !url.startsWith('edge://') &&
+             url.length > 0;
+    });
+    
+    console.log(`📑 Found ${tabs.length} accessible tabs (including ${tabs.filter(t => t.url.startsWith('chrome-extension://')).length} extension pages)`);
+    console.log(`📝 Tab URLs:`, tabs.map(t => t.url));
+    
+    if (tabs.length === 0) {
+      console.log('⚠️ No accessible tabs found');
+      tabData = {
+        tabs: [],
+        lastUpdated: Date.now(),
+        stats: { total: 0, successful: 0, summarized: 0, failed: 0 }
+      };
+      broadcastTabDataUpdate();
+      return tabData;
     }
     
     const promises = tabs.map(tab => extractTabContent(tab));
     const results = await Promise.all(promises);
     
     const successCount = results.filter(r => r?.hasContent).length;
-    const summarizedCount = results.filter(r => r?.summary).length;
+    const failedTabs = results.filter(r => !r?.hasContent);
+    const extensionTabs = results.filter(r => r?.isExtension).length;
+    
+    console.log(`✅ Extraction: ${successCount} successful (${extensionTabs} extension pages), ${failedTabs.length} failed`);
     
     tabData = {
       tabs: results.filter(r => r !== null),
@@ -227,12 +331,12 @@ async function refreshAllTabs() {
       stats: {
         total: tabs.length,
         successful: successCount,
-        summarized: summarizedCount,
-        failed: tabs.length - successCount
+        summarized: 0,
+        failed: failedTabs.length,
+        extensions: extensionTabs
       }
     };
     
-    console.log(`✅ Fast refresh: ${successCount} tabs, ${summarizedCount} summaries`);
     broadcastTabDataUpdate();
     return tabData;
   } catch (error) {
@@ -331,32 +435,50 @@ async function askGemini(question, tabs) {
     };
   }
 
-  const topTabs = meaningfulTabs.slice(0, 5);
-  const tabsContext = topTabs.map((tab, i) =>
-    `TAB ${i + 1}: "${tab.title}"\nSummary: ${tab.summary || ''}\nContent: ${tab.text.slice(0, 1500)}...\n`
-  ).join('\n');
+  // Get more tabs for better coverage
+  const topTabs = meaningfulTabs.slice(0, 10);
+  
+  // Build detailed tab list with content
+  const tabsList = topTabs.map((tab, i) => {
+    const preview = tab.text.slice(0, 300).replace(/\s+/g, ' ').trim();
+    return `${i + 1}. "${tab.title}"\n   ${preview}...`;
+  }).join('\n\n');
 
+  // Format request for your backend - it expects { prompt: { contents: [...] } }
   const requestBody = {
-    question: `STRICT FORMAT: Reply in exactly 2 lines MAX. 
-LINE 1: Brief context (5-8 words max)
-LINE 2: "Check: [Most relevant tab name]"
+    prompt: {
+      contents: [
+        {
+          parts: [
+            {
+              text: `You are a helpful assistant that summarizes open browser tabs.
 
-EXAMPLES:
-- "Shopping for electronics deals.\nCheck: Amazon India"
-- "Working on CSS scrollbar design.\nCheck: Claude chat"  
-- "Researching web development topics.\nCheck: MDN docs"
-- "Browsing shopping websites.\nCheck: Amazon shopping"
+User has ${topTabs.length} tabs open. When asked "what tabs are open" or similar, provide a numbered list with brief descriptions.
 
-NO explanations, NO lists, NO bullet points, NO details.
-Just 2 lines exactly as shown above.
+Format:
+1. "Exact Tab Title"
+   Brief description of the content (one line)
 
-Question: ${question}
+2. "Next Tab Title"
+   Brief description...
 
-Available tabs: ${topTabs.map(tab => `"${tab.title}"`).join(', ')}`,
-    tabsContext,
-    maxTokens: 30,
-    temperature: 0.1
+Available tabs:
+${tabsList}
+
+User question: ${question}
+
+Remember: Use exact tab titles in quotes, provide helpful summaries.`
+            }
+          ]
+        }
+      ]
+    }
   };
+
+  console.log('📤 Sending to Gemini:', { 
+    question, 
+    tabCount: topTabs.length
+  });
 
   try {
     const res = await fetch(GEMINI_ENDPOINT, {
@@ -368,20 +490,61 @@ Available tabs: ${topTabs.map(tab => `"${tab.title}"`).join(', ')}`,
     if (!res.ok) throw new Error(`API error ${res.status}`);
     const data = await res.json();
 
-    let answer = data?.answer || "Content found.\nCheck: Most relevant tab";
+    console.log('📥 Gemini raw response:', data);
 
-    // ENFORCE 2-LINE MAXIMUM
-    const lines = answer.split('\n').filter(line => line.trim().length > 0).slice(0, 2);
-    answer = lines.join('\n');
-
-    // Clean up any remaining formatting
-    answer = answer.replace(/[-*•\d+\.]/g, '').replace(/\s+/g, ' ').trim();
-
+    // Extract answer from Gemini's response format
+    let answer = data?.candidates?.[0]?.content?.parts?.[0]?.text || data?.answer;
+    
+    console.log('🤖 Gemini answer:', answer);
+    
+    // FORCE LOCAL SUMMARY if Gemini response is bad
+    const isBadResponse = !answer || 
+                          answer.length < 50 || 
+                          !answer.includes('"') ||
+                          answer.includes('Found content. Check:');
+    
+    if (isBadResponse) {
+      console.log('⚠️ Bad Gemini response, creating local summary');
+      answer = `📑 You have ${topTabs.length} tabs open:\n\n`;
+      topTabs.forEach((tab, i) => {
+        const snippet = tab.text.slice(0, 100).replace(/\s+/g, ' ').trim();
+        answer += `${i + 1}. "${tab.title}"\n   ${snippet}...\n\n`;
+      });
+    }
+    
     const referencedTabs = extractReferencedTabs(answer, tabs);
+    
+    // Add all tabs as referenced if none found
+    if (referencedTabs.length === 0) {
+      topTabs.forEach(tab => {
+        referencedTabs.push({
+          title: tab.title,
+          url: tab.url,
+          favicon: tab.favicon,
+          tabId: tab.id
+        });
+      });
+    }
+    
     return { answer, referencedTabs, timestamp: Date.now() };
   } catch (error) {
     console.error('❌ Gemini error:', error);
-    return keywordFallback(question, tabs);
+    
+    // Better fallback with actual content
+    const answer = `📑 You have ${topTabs.length} tabs open:\n\n` +
+      topTabs.map((tab, i) => {
+        const snippet = tab.text.slice(0, 100).replace(/\s+/g, ' ').trim();
+        return `${i + 1}. "${tab.title}"\n   ${snippet}...`;
+      }).join('\n\n');
+    
+    const referencedTabs = topTabs.map(tab => ({
+      title: tab.title,
+      url: tab.url,
+      favicon: tab.favicon,
+      tabId: tab.id
+    }));
+    
+    return { answer, referencedTabs, timestamp: Date.now() };
   }
 }
 
