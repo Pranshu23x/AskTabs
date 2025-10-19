@@ -136,7 +136,7 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 10px 16px; /* Reduced padding */
+  padding: 1px 16px; /* Reduced padding */
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   flex-shrink: 0;
   background: linear-gradient(135deg,
@@ -168,14 +168,14 @@ body {
 /* Header actions - More compact */
 .header-actions {
   display: flex;
-  gap: 6px; /* Reduced gap */
+  gap: 9px; /* Reduced gap */
   align-items: center;
 }
 
 .clear-button {
   padding: 5px 8px; /* Reduced padding */
   font-size: 10px; /* Smaller font */
-  min-height: 28px; /* Reduced height */
+  min-height: 30px; /* Reduced height */
   background: linear-gradient(135deg,
     rgba(255, 255, 255, 0.1) 0%,
     rgba(255, 255, 255, 0.05) 100%);
@@ -699,7 +699,7 @@ body {
   }
   
   .section-header {
-    padding: 8px 12px; /* Reduced padding */
+    padding: 1px 3px; /* Reduced padding */
     flex-direction: column;
     gap: 8px;
     align-items: flex-start;
